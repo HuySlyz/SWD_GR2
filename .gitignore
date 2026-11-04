@@ -1,0 +1,10 @@
+# NetBeans / Ant build output
+WarrantyManagement/build/
+WarrantyManagement/dist/
+WarrantyManagement/nbproject/private/
+# IDE / OS
+.idea/
+.vscode/
+*.log
+.DS_Store
+Thumbs.db

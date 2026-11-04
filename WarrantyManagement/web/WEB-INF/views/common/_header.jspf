@@ -1,0 +1,61 @@
+<%@page pageEncoding="UTF-8" import="com.warranty.util.Html, com.warranty.util.AuthFilter, com.warranty.model.Role, com.warranty.model.Entities.User"%>
+<%
+    String ctx = request.getContextPath();
+    User me = (User) session.getAttribute(AuthFilter.SESSION_USER);
+    String flash = (String) session.getAttribute("flash");
+    String error = (String) session.getAttribute("error");
+    session.removeAttribute("flash");
+    session.removeAttribute("error");
+    Integer unread = (Integer) request.getAttribute("unreadCount");
+    String[][] menu;
+    if (me == null) {
+        menu = new String[][] {{"lookup", "/lookup", "Tra cứu bảo hành"}, {"login", "/login", "Đăng nhập"}};
+    } else {
+        switch (me.role()) {
+            case ADMIN:
+                menu = new String[][] {{"dashboard", "/admin/dashboard", "Tổng quan"}, {"users", "/admin/users", "Tài khoản"},
+                    {"products", "/admin/products", "Sản phẩm & chính sách BH"}, {"partners", "/admin/partners", "Người bán / NCC"},
+                    {"tickets", "/tickets", "Ticket"}, {"lookup", "/lookup", "Tra cứu"}};
+                break;
+            case SUPPORT:
+                menu = new String[][] {{"tickets", "/tickets", "Ticket"}, {"ticket-new", "/tickets?action=new", "Tạo ticket"},
+                    {"orders", "/support/orders", "Đơn hàng"}, {"lookup", "/lookup", "Tra cứu"}};
+                break;
+            case TECHNICIAN:
+                menu = new String[][] {{"tickets", "/tickets", "Ticket được giao"}, {"lookup", "/lookup", "Tra cứu"}};
+                break;
+            case INVENTORY:
+                menu = new String[][] {{"stock", "/inventory/stock", "Tồn kho"}, {"parts", "/inventory/parts", "Linh kiện"},
+                    {"requests", "/inventory/requests", "Yêu cầu linh kiện"}, {"po", "/inventory/po", "Nhập hàng (PO)"}};
+                break;
+            default:
+                menu = new String[][] {{"warranties", "/customer/warranties", "Sản phẩm của tôi"},
+                    {"tickets", "/tickets", "Yêu cầu bảo hành"}, {"notifications", "/customer/notifications", "Thông báo"},
+                    {"lookup", "/lookup", "Tra cứu"}};
+        }
+    }
+%>
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title><%= Html.esc(pageTitle) %> – Sales &amp; Warranty</title>
+    <link rel="stylesheet" href="<%= ctx %>/css/style.css">
+</head>
+<body>
+<header>
+    <h1>🔧 Sales &amp; Warranty</h1>
+    <nav>
+        <% for (String[] m : menu) { %>
+            <a href="<%= ctx + m[1] %>" class="<%= m[0].equals(activeMenu) ? "active" : "" %>"><%= m[2] %><%
+                if ("notifications".equals(m[0]) && unread != null && unread > 0) { %><span class="count"><%= unread %></span><% } %></a>
+        <% } %>
+    </nav>
+    <% if (me != null) { %>
+        <div class="who"><%= Html.esc(me.fullName()) %> · <%= me.role().getLabel() %><a href="<%= ctx %>/logout">Đăng xuất</a></div>
+    <% } %>
+</header>
+<main>
+<% if (flash != null) { %><div class="alert ok"><%= Html.esc(flash) %></div><% } %>
+<% if (error != null) { %><div class="alert err"><%= Html.esc(error) %></div><% } %>

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- NetBeans tu sinh lai nbproject/build-impl.xml khi mo project -->
+<project name="WarrantyManagement" default="default" basedir=".">
+    <description>Quan ly bao hanh linh kien dien tu (Java Web MVC - Tomcat 10.1)</description>
+    <import file="nbproject/build-impl.xml"/>
+</project>
