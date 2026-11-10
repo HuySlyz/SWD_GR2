@@ -26,6 +26,7 @@ import java.sql.SQLException;
  *  - Customer: gui yeu cau, theo doi, thanh toan phi, xac nhan hoan thanh
  *  - Customer support / Admin: tao thay khach, duyet & phan cong ky thuat, dong ticket tai quay
  *  - Technician: ticket duoc giao -> nhan viec, xin linh kien, hoan tat, ban giao
+ * doGet / doPost chi dieu huong theo action; xu ly nam trong cac ham rieng ben duoi.
  */
 @WebServlet("/tickets")
 public class TicketServlet extends BaseServlet {
@@ -34,38 +35,89 @@ public class TicketServlet extends BaseServlet {
 
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
-        User me = currentUser(req);
         String action = param(req, "action");
         try {
             if ("new".equals(action)) {
-                if (me.role() == Role.TECHNICIAN) {
-                    resp.sendError(HttpServletResponse.SC_FORBIDDEN);
-                    return;
-                }
-                if (me.role() == Role.CUSTOMER) {
-                    req.setAttribute("myWarranties", Tx.read(c -> OrderDAO.warrantiesOfCustomer(c, me.id())));
-                }
-                req.setAttribute("serial", param(req, "serial"));
-                render(req, resp, "common/ticket-new");
+                showCreateTicketForm(req, resp);
             } else if ("view".equals(action)) {
-                showDetail(req, resp, me, intParam(req, "id"));
+                showTicketDetail(req, resp);
             } else {
-                TicketStatus status = enumParam(req, "status", TicketStatus.class);
-                Integer techFilter = me.role() == Role.TECHNICIAN ? Integer.valueOf(me.id()) : null;
-                Integer customerFilter = me.role() == Role.CUSTOMER ? Integer.valueOf(me.id()) : null;
-                req.setAttribute("tickets", Tx.read(c ->
-                        TicketDAO.search(c, status, techFilter, customerFilter, param(req, "q"))));
-                req.setAttribute("status", status);
-                req.setAttribute("keyword", param(req, "q"));
-                render(req, resp, "common/tickets");
+                showTicketList(req, resp);
             }
         } catch (SQLException e) {
             throw new ServletException(e);
         }
     }
 
-    private void showDetail(HttpServletRequest req, HttpServletResponse resp, User me, int id)
+    @Override
+    protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
+        String action = param(req, "action");
+        switch (action == null ? "" : action) {
+            case "create":
+                createTicket(req, resp);
+                break;
+            case "assign":
+                assignTechnician(req, resp);
+                break;
+            case "accept":
+                acceptTicket(req, resp);
+                break;
+            case "requestPart":
+                requestPart(req, resp);
+                break;
+            case "complete":
+                completeRepair(req, resp);
+                break;
+            case "handover":
+                handoverTicket(req, resp);
+                break;
+            case "pay":
+                payRepairFee(req, resp);
+                break;
+            case "close":
+                closeTicket(req, resp);
+                break;
+            default:
+                rejectUnknownAction(req, resp);
+        }
+    }
+
+    // ============================ GET ============================
+
+    /** Form gui yeu cau bao hanh (Customer / Support); ky thuat vien khong duoc tao. */
+    private void showCreateTicketForm(HttpServletRequest req, HttpServletResponse resp)
             throws SQLException, ServletException, IOException {
+        User me = currentUser(req);
+        if (me.role() == Role.TECHNICIAN) {
+            resp.sendError(HttpServletResponse.SC_FORBIDDEN);
+            return;
+        }
+        if (me.role() == Role.CUSTOMER) {
+            req.setAttribute("myWarranties", Tx.read(c -> OrderDAO.warrantiesOfCustomer(c, me.id())));
+        }
+        req.setAttribute("serial", param(req, "serial"));
+        render(req, resp, "common/ticket-new");
+    }
+
+    /** Danh sach ticket: KTV chi thay ticket cua minh, khach chi thay ticket cua minh. */
+    private void showTicketList(HttpServletRequest req, HttpServletResponse resp)
+            throws SQLException, ServletException, IOException {
+        User me = currentUser(req);
+        TicketStatus status = enumParam(req, "status", TicketStatus.class);
+        Integer techFilter = me.role() == Role.TECHNICIAN ? Integer.valueOf(me.id()) : null;
+        Integer customerFilter = me.role() == Role.CUSTOMER ? Integer.valueOf(me.id()) : null;
+        req.setAttribute("tickets", Tx.read(c ->
+                TicketDAO.search(c, status, techFilter, customerFilter, param(req, "q"))));
+        req.setAttribute("status", status);
+        req.setAttribute("keyword", param(req, "q"));
+        render(req, resp, "common/tickets");
+    }
+
+    /** Chi tiet ticket: nhat ky sua, linh kien, ban giao, thanh toan. */
+    private void showTicketDetail(HttpServletRequest req, HttpServletResponse resp)
+            throws SQLException, ServletException, IOException {
+        User me = currentUser(req);
+        int id = intParam(req, "id");
         Ticket t = Tx.read(c -> TicketDAO.find(c, id));
         if (t == null || !canView(me, t)) {
             flashError(req, "Ticket không tồn tại hoặc bạn không có quyền xem");
@@ -101,66 +153,115 @@ public class TicketServlet extends BaseServlet {
         }
     }
 
-    @Override
-    protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
+    // ============================ POST ============================
+
+    /** Khach tu gui yeu cau, hoac Support tao thay khach (dien thoai / tai quay). */
+    private void createTicket(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
         User me = currentUser(req);
-        String action = param(req, "action");
-        int id = intParam(req, "id");
-
-        if ("create".equals(action)) {
-            perform(req, resp, me.role() == Role.CUSTOMER ? "/tickets" : "/tickets?status=NEW", () -> {
-                requireRole(me, Role.CUSTOMER, Role.SUPPORT);
-                boolean paid = boolParam(req, "acceptPaidRepair");
-                String code = me.role() == Role.CUSTOMER
-                        ? ticketService.submitByCustomer(me.id(), param(req, "serial"), param(req, "issue"), paid)
-                        : ticketService.submitBySupport(me.id(), param(req, "serial"), param(req, "issue"),
-                                enumParam(req, "channel", Channel.class), paid);
-                return "Đã tạo ticket " + code + " (trạng thái: Mới)";
-            });
-            return;
-        }
-
-        // Sau khi ban giao, ky thuat vien cu khong con quyen xem ticket -> ve danh sach
-        String back = "handover".equals(action) ? "/tickets" : "/tickets?action=view&id=" + id;
-        perform(req, resp, back, () -> {
-            switch (action == null ? "" : action) {
-                case "assign":
-                    requireRole(me, Role.SUPPORT, Role.ADMIN);
-                    ticketService.assign(id, supportIdOf(me), intParam(req, "technicianId"));
-                    return "Đã phân công kỹ thuật viên";
-                case "accept":
-                    requireRole(me, Role.TECHNICIAN);
-                    ticketService.accept(id, me.id(), param(req, "diagnosis"));
-                    return "Đã nhận việc – ticket chuyển sang Đang sửa chữa";
-                case "requestPart":
-                    requireRole(me, Role.TECHNICIAN);
-                    return ticketService.requestPart(id, me.id(), intParam(req, "partId"), intParam(req, "quantity"));
-                case "complete":
-                    requireRole(me, Role.TECHNICIAN);
-                    ticketService.complete(id, me.id(), param(req, "result"), param(req, "shiftNote"),
-                            moneyParam(req, "repairFee"));
-                    return "Đã hoàn tất sửa chữa và thông báo khách hàng";
-                case "handover":
-                    requireRole(me, Role.TECHNICIAN);
-                    ticketService.handover(id, me.id(), intParam(req, "toTechnicianId"), param(req, "note"));
-                    return "Đã bàn giao ticket cho kỹ thuật viên khác";
-                case "pay": {
-                    requireRole(me, Role.CUSTOMER, Role.SUPPORT, Role.ADMIN);
-                    OrderService.PaymentResult r = ticketService.payRepairFee(id, me,
-                            enumParam(req, "method", PaymentMethod.class), boolParam(req, "simulateFail"));
-                    if (!r.success()) {
-                        throw new BusinessException(r.message());
-                    }
-                    return r.message();
-                }
-                case "close":
-                    requireRole(me, Role.CUSTOMER, Role.SUPPORT, Role.ADMIN);
-                    ticketService.close(id, me);
-                    return "Đã đóng ticket";
-                default:
-                    throw new BusinessException("Thao tác không hợp lệ");
-            }
+        perform(req, resp, me.role() == Role.CUSTOMER ? "/tickets" : "/tickets?status=NEW", () -> {
+            requireRole(me, Role.CUSTOMER, Role.SUPPORT);
+            boolean paid = boolParam(req, "acceptPaidRepair");
+            String code = me.role() == Role.CUSTOMER
+                    ? ticketService.submitByCustomer(me.id(), param(req, "serial"), param(req, "issue"), paid)
+                    : ticketService.submitBySupport(me.id(), param(req, "serial"), param(req, "issue"),
+                            enumParam(req, "channel", Channel.class), paid);
+            return "Đã tạo ticket " + code + " (trạng thái: Mới)";
         });
+    }
+
+    /** Support duyet ticket NEW va phan cong ky thuat vien -> ASSIGNED. */
+    private void assignTechnician(HttpServletRequest req, HttpServletResponse resp)
+            throws ServletException, IOException {
+        User me = currentUser(req);
+        int id = intParam(req, "id");
+        perform(req, resp, ticketDetailPath(id), () -> {
+            requireRole(me, Role.SUPPORT, Role.ADMIN);
+            ticketService.assign(id, supportIdOf(me), intParam(req, "technicianId"));
+            return "Đã phân công kỹ thuật viên";
+        });
+    }
+
+    /** KTV nhan viec + chan doan -> IN_REPAIR. */
+    private void acceptTicket(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
+        User me = currentUser(req);
+        int id = intParam(req, "id");
+        perform(req, resp, ticketDetailPath(id), () -> {
+            requireRole(me, Role.TECHNICIAN);
+            ticketService.accept(id, me.id(), param(req, "diagnosis"));
+            return "Đã nhận việc – ticket chuyển sang Đang sửa chữa";
+        });
+    }
+
+    /** KTV xin linh kien (giu ton kho, cho kho giao). */
+    private void requestPart(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
+        User me = currentUser(req);
+        int id = intParam(req, "id");
+        perform(req, resp, ticketDetailPath(id), () -> {
+            requireRole(me, Role.TECHNICIAN);
+            return ticketService.requestPart(id, me.id(), intParam(req, "partId"), intParam(req, "quantity"));
+        });
+    }
+
+    /** KTV hoan tat sua chua (+ phi neu ngoai bao hanh) -> COMPLETED. */
+    private void completeRepair(HttpServletRequest req, HttpServletResponse resp)
+            throws ServletException, IOException {
+        User me = currentUser(req);
+        int id = intParam(req, "id");
+        perform(req, resp, ticketDetailPath(id), () -> {
+            requireRole(me, Role.TECHNICIAN);
+            ticketService.complete(id, me.id(), param(req, "result"), param(req, "shiftNote"),
+                    moneyParam(req, "repairFee"));
+            return "Đã hoàn tất sửa chữa và thông báo khách hàng";
+        });
+    }
+
+    /** Ban giao ca; KTV cu mat quyen xem ticket nen quay ve danh sach. */
+    private void handoverTicket(HttpServletRequest req, HttpServletResponse resp)
+            throws ServletException, IOException {
+        User me = currentUser(req);
+        int id = intParam(req, "id");
+        perform(req, resp, "/tickets", () -> {
+            requireRole(me, Role.TECHNICIAN);
+            ticketService.handover(id, me.id(), intParam(req, "toTechnicianId"), param(req, "note"));
+            return "Đã bàn giao ticket cho kỹ thuật viên khác";
+        });
+    }
+
+    /** Thanh toan phi sua chua qua cong gia lap (Customer / Support / Admin). */
+    private void payRepairFee(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
+        User me = currentUser(req);
+        int id = intParam(req, "id");
+        perform(req, resp, ticketDetailPath(id), () -> {
+            requireRole(me, Role.CUSTOMER, Role.SUPPORT, Role.ADMIN);
+            OrderService.PaymentResult r = ticketService.payRepairFee(id, me,
+                    enumParam(req, "method", PaymentMethod.class), boolParam(req, "simulateFail"));
+            if (!r.success()) {
+                throw new BusinessException(r.message());
+            }
+            return r.message();
+        });
+    }
+
+    /** Dong ticket COMPLETED (phai tra phi truoc neu co) -> CLOSED. */
+    private void closeTicket(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
+        User me = currentUser(req);
+        int id = intParam(req, "id");
+        perform(req, resp, ticketDetailPath(id), () -> {
+            requireRole(me, Role.CUSTOMER, Role.SUPPORT, Role.ADMIN);
+            ticketService.close(id, me);
+            return "Đã đóng ticket";
+        });
+    }
+
+    private void rejectUnknownAction(HttpServletRequest req, HttpServletResponse resp)
+            throws ServletException, IOException {
+        perform(req, resp, ticketDetailPath(intParam(req, "id")), () -> {
+            throw new BusinessException("Thao tác không hợp lệ");
+        });
+    }
+
+    private static String ticketDetailPath(int id) {
+        return "/tickets?action=view&id=" + id;
     }
 
     private static void requireRole(User me, Role... roles) throws BusinessException {
